@@ -12,8 +12,8 @@
   #hud .stat { background:#171a22; border:1px solid #262b38; border-radius:8px; padding:6px 14px; }
   #hud .stat b { color:#ffd166; font-size:17px; }
   #combo { position:absolute; top:52px; left:50%; transform:translateX(-50%); font-size:22px; font-weight:700; color:#ff6b6b; opacity:0; transition:opacity .2s; pointer-events:none; text-shadow:0 0 12px rgba(255,107,107,.6); }
-  #stage { flex:1; position:relative; }
-  canvas { position:absolute; inset:0; width:100%; height:100%; touch-action:none; cursor:crosshair; }
+  #stage { flex:1; position:relative; overflow:hidden; background:#0d0f14; }
+  canvas { position:absolute; left:0; top:0; touch-action:none; cursor:crosshair; }
   #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; background:rgba(10,12,17,.82); backdrop-filter:blur(4px); z-index:5; }
   #overlay h1 { font-size:44px; letter-spacing:2px; background:linear-gradient(90deg,#ff6b6b,#ffd166); -webkit-background-clip:text; background-clip:text; color:transparent; }
   #overlay p { color:#9aa3b5; font-size:15px; max-width:340px; text-align:center; line-height:1.5; }
@@ -43,7 +43,8 @@
     <canvas id="cv"></canvas>
     <div id="overlay">
       <h1>NINJA SLICE</h1>
-      <p>Swipe to slice the flying pixel fruit. Chain slices for combos. Don't slice the bombs — and don't let fruit hit the floor!</p>
+      <p>Swipe (or drag with mouse) to slice the flying pixel fruit. Chain slices for combos. Don't slice the bombs — and don't let fruit hit the floor!</p>
+      <p style="font-size:13px;color:#6b7488">P / Esc to pause &middot; Space to start</p>
       <div class="btns">
         <button class="primary" id="btnClassic">Classic</button>
         <button class="primary" id="btnTimed">60-Second</button>
@@ -64,8 +65,14 @@ var W=0,H=0,DPR=1;
 function resize(){
   DPR=Math.min(window.devicePixelRatio||1,2);
   var r=cv.parentElement.getBoundingClientRect();
-  W=r.width; H=r.height;
-  cv.width=W*DPR; cv.height=H*DPR;
+  var sw=r.width, sh=r.height;
+  var s=Math.min(sw/900, sh/700);
+  if(s>1.4) s=1.4; if(s<0.4) s=0.4;
+  W=900*s; H=700*s;
+  cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR);
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.style.left=((sw-W)/2)+'px';
+  cv.style.top=((sh-H)/2)+'px';
   ctx.setTransform(DPR,0,0,DPR,0,0);
 }
 window.addEventListener('resize',resize); resize();
@@ -86,6 +93,21 @@ var score=0, best=0, lives=3, timeLeft=60, lastTick=0;
 var objects=[], particles=[], slices=[];
 var spawnTimer=0, spawnInterval=1.4, difficulty=0;
 var pointerDown=false, trail=[];
+var paused=false;
+
+var AC=null;
+function beep(freq,dur,vol,type){
+  try{
+    if(!AC) AC=new (window.AudioContext||window.webkitAudioContext)();
+    if(AC.state==='suspended') AC.resume();
+    var o=AC.createOscillator(), g=AC.createGain();
+    o.type=type||'square'; o.frequency.value=freq;
+    g.gain.setValueAtTime(vol||0.08,AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+dur);
+    o.connect(g); g.connect(AC.destination);
+    o.start(); o.stop(AC.currentTime+dur);
+  }catch(e){}
+}
 
 try{ best=parseInt(localStorage.getItem('ninjaSliceBest')||'0',10)||0; }catch(e){}
 bestEl.textContent=best;
@@ -176,18 +198,45 @@ function endGame(){
   state='over';
   if(score>best){ best=score; try{ localStorage.setItem('ninjaSliceBest',String(best)); }catch(e){} }
   bestEl.textContent=best;
+  var newBest=score>=best && score>0;
   overlay.innerHTML='<h1>'+(score>0?'NICE SLICING!':'GAME OVER')+'</h1>'+
-    '<div id="endStats">Score <b>'+score+'</b><br>Best <b>'+best+'</b></div>'+
+    '<div id="endStats">Score <b>'+score+'</b><br>Best <b>'+best+'</b>'+(newBest?'<br><span style="color:#ff6b6b;font-weight:700">NEW BEST!</span>':'')+'</div>'+
     '<div class="btns"><button class="primary" id="btnAgain">Play Again</button><button id="btnMenu">Menu</button></div>';
   overlay.style.display='flex';
   document.getElementById('btnAgain').onclick=function(){ startGame(mode); };
   document.getElementById('btnMenu').onclick=function(){ showMenu(); };
 }
 
+function togglePause(){
+  if(state!=='playing') return;
+  paused=!paused;
+  if(paused){
+    overlay.innerHTML='<h1>PAUSED</h1><p>Take a breath. Your fruit is waiting.</p>'+
+      '<div class="btns"><button class="primary" id="btnResume">Resume</button><button id="btnQuit">Menu</button></div>';
+    overlay.style.display='flex';
+    document.getElementById('btnResume').onclick=function(){ togglePause(); };
+    document.getElementById('btnQuit').onclick=function(){ paused=false; showMenu(); };
+  } else {
+    overlay.style.display='none';
+    lastTick=performance.now();
+  }
+}
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden && state==='playing' && !paused) togglePause();
+});
+window.addEventListener('keydown',function(e){
+  if(e.key==='p'||e.key==='P'||e.key==='Escape'){ if(state==='playing') togglePause(); }
+  else if(e.key===' '||e.key==='Enter'){
+    if(state==='menu'){ startGame('classic'); }
+    else if(state==='over'){ startGame(mode); }
+  }
+});
+
 function showMenu(){
   state='menu';
   overlay.innerHTML='<h1>NINJA SLICE</h1>'+
-    '<p>Swipe to slice the flying pixel fruit. Chain slices for combos. Don\'t slice the bombs — and don\'t let fruit hit the floor!</p>'+
+    '<p>Swipe (or drag with mouse) to slice the flying pixel fruit. Chain slices for combos. Don\'t slice the bombs — and don\'t let fruit hit the floor!</p>'+
+    '<p style="font-size:13px;color:#6b7488">P / Esc to pause &middot; Space to start</p>'+
     '<div class="btns"><button class="primary" id="btnClassic">Classic</button><button class="primary" id="btnTimed">60-Second</button></div>';
   overlay.style.display='flex';
   document.getElementById('btnClassic').onclick=function(){ startGame('classic'); };
@@ -200,7 +249,10 @@ document.getElementById('btnTimed').onclick=function(){ startGame('timed'); };
 
 function getPos(e){
   var r=cv.getBoundingClientRect();
-  var t=e.touches?e.touches[0]:e;
+  var t;
+  if(e.touches && e.touches.length) t=e.touches[0];
+  else if(e.changedTouches && e.changedTouches.length) t=e.changedTouches[0];
+  else t=e;
   return {x:t.clientX-r.left, y:t.clientY-r.top};
 }
 
@@ -249,6 +301,7 @@ function checkSlices(x1,y1,x2,y2){
       o.sliced=true;
       if(o.type.name==='bomb'){
         burst(o.x,o.y,o.type,26);
+        beep(110,0.25,0.12,'sawtooth');
         if(mode==='classic'){
           lives--; livesEl.textContent=lives;
           if(lives<=0){ endGame(); return; }
@@ -259,6 +312,7 @@ function checkSlices(x1,y1,x2,y2){
       } else {
         hitAny=true;
         score+=10; scoreEl.textContent=score;
+        beep(660+Math.random()*220,0.09,0.07,'square');
         burst(o.x,o.y,o.type,14);
         // two halves fly apart
         var ang=Math.atan2(y2-y1,x2-x1)+Math.PI/2;
@@ -283,7 +337,7 @@ function checkSlices(x1,y1,x2,y2){
 function loop(now){
   requestAnimationFrame(loop);
   var dt=Math.min((now-lastTick)/1000,0.05); lastTick=now;
-  if(state!=='playing'){ drawIdle(now); return; }
+  if(state!=='playing'||paused){ drawIdle(now); return; }
 
   // difficulty ramp
   difficulty+=dt*0.15;
@@ -388,6 +442,7 @@ window.addEventListener('mouseup',onUp);
 cv.addEventListener('touchstart',onDown,{passive:false});
 cv.addEventListener('touchmove',onMove,{passive:false});
 cv.addEventListener('touchend',onUp);
+cv.addEventListener('touchcancel',onUp);
 })();
 </script>
 <div style="position:fixed;bottom:4px;left:0;right:0;text-align:center;font-size:11px;color:#8b949e;z-index:99;">More free tools &amp; games: <a href="https://pennypenguinapp-beep.github.io/" style="color:#58a6ff;">LaunchTower</a></div>
